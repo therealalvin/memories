@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+transformers
+pillow
+pillow-heif
+exifread
+opencv-python-headless
+jinja2
+python-multipart
+aiosqlite
