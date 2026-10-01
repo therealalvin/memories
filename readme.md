@@ -25,30 +25,41 @@ To point the container to your local media, you need to map your host machine's 
 Create a `docker-compose.yaml` file in your project directory and configure it as follows:
 
 ```yaml
-version: '3.8'
-
 services:
-  memories:
-    image: therealalvin/memories:latest
+  memories-app:
+    build: .
     container_name: memories-app
-    restart: unless-stopped
     ports:
-      - "3000:3000"
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=UTC
+      - "8000:8000"
     volumes:
-      - /path/to/your/app/data:/app/data
-      - /path/to/your/photos:/photos
-      - /path/to/your/videos:/videos
+      # Map source code for live-reloading
+      - ./src:/app:ro
+      # Map database/data directory read-write
+      - ./data:/data:rw
+      # Persist Hugging Face model cache on disk
+      - ./data/hf_cache:/root/.cache/huggingface:rw
+      # Media directories (Read-Only) - put in your pictures and videos directories below
+      - /path/to/Pictures:/media/pictures:ro
+      - /path/to/Videos:/media/videos:ro
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
 ```
 
 ### Path Customization Guide
 Replace the placeholder paths on the left side of the colon (`:`) with your actual local directory paths:
-* `/path/to/your/app/data`: Where the application stores its database and configuration files.
-* `/path/to/your/photos`: The absolute path on your host machine where your **photos** are stored (e.g., `/home/username/Pictures` on Linux or `/Users/username/Pictures` on macOS).
-* `/path/to/your/videos`: The absolute path on your host machine where your **videos** are stored (e.g., `/home/username/Videos`).
+* `/path/to/Pictures`: The absolute path on your host machine where your **photos** are stored (e.g., `/home/username/Pictures` on Linux or `/Users/username/Pictures` on macOS).
+* `/path/to/Videos`: The absolute path on your host machine where your **videos** are stored (e.g., `/home/username/Videos`).
 
 ---
 
@@ -61,7 +72,7 @@ Replace the placeholder paths on the left side of the colon (`:`) with your actu
    ```
 3. Once the containers are up and running, open your web browser and navigate to:
    ```text
-   http://localhost:3000
+   http://localhost:8000
    ```
 4. To view logs and troubleshoot any startup issues, run:
    ```bash
