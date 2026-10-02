@@ -2,6 +2,7 @@ import os
 import io
 import cv2
 import torch
+import subprocess
 import numpy as np
 from typing import List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor
@@ -53,37 +54,60 @@ def _extract_tensor(features):
 
 
 def extract_video_frame(video_path: str) -> Optional[Image.Image]:
-    """Extracts a video frame at ~1 second for dynamic thumbnail generation and embedding."""
+    """Extracts a video frame for thumbnail generation and embedding."""
+    ext = os.path.splitext(video_path)[1].lower()
+
+    # OpenCV fails on multi-stream Insta360 .insv containers. Use FFmpeg directly.
+    if ext == '.insv':
+        return _extract_frame_ffmpeg(video_path)
+
     try:
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            return None
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
-        target_frame = int(fps * 1.0)
-        
-        cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-        success, frame = cap.read()
-
-        if not success:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+            target_frame = int(fps * 1.0)
+            
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
             success, frame = cap.read()
 
-        cap.release()
+            if not success:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                success, frame = cap.read()
 
-        if success and frame is not None:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            return Image.fromarray(frame_rgb)
+            cap.release()
+
+            if success and frame is not None and frame.size > 0:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                return Image.fromarray(frame_rgb)
     except Exception as e:
-        print(f"Error extracting frame from video {video_path}: {e}")
+        print(f"OpenCV frame extraction error for {video_path}: {e}")
+
+    return _extract_frame_ffmpeg(video_path)
+
+
+def _extract_frame_ffmpeg(video_path: str) -> Optional[Image.Image]:
+    """Robust FFmpeg frame extraction supporting multi-stream camera formats like .insv."""
+    cmds = [
+        # Attempt 1: Map primary video stream at 1 second
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", video_path, "-map", "0:v:0", "-ss", "00:00:01", "-vframes", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+        # Attempt 2: Fallback to frame 0
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", video_path, "-map", "0:v:0", "-vframes", "1", "-f", "image2pipe", "-vcodec", "mjpeg", "-"]
+    ]
+
+    for cmd in cmds:
+        try:
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            if proc.returncode == 0 and proc.stdout and len(proc.stdout) > 0:
+                img = Image.open(io.BytesIO(proc.stdout))
+                return img.convert("RGB")
+        except Exception as e:
+            print(f"FFmpeg extraction attempt failed for {video_path}: {e}")
+
     return None
 
 
 def generate_dynamic_thumbnail_bytes(media_path: str, media_type: str, max_size: int = 360) -> Optional[bytes]:
-    """
-    Generates a JPEG thumbnail dynamically in-memory.
-    Saves zero files to disk.
-    """
+    """Generates a JPEG thumbnail dynamically in-memory."""
     try:
         if media_type == "video":
             frame = extract_video_frame(media_path)
@@ -110,10 +134,7 @@ def generate_dynamic_thumbnail_bytes(media_path: str, media_type: str, max_size:
 
 
 def generate_dynamic_full_image_bytes(media_path: str) -> Optional[bytes]:
-    """
-    Generates a full-resolution JPEG dynamically in-memory for formats 
-    browsers cannot natively render (like HEIC/HEIF/TIFF/BMP).
-    """
+    """Generates a full-resolution JPEG dynamically in-memory for non-browser formats."""
     try:
         with Image.open(media_path) as img:
             img = ImageOps.exif_transpose(img)
