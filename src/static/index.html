@@ -4,8 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Memories Engine</title>
+    <!-- Video.js for Pannellum 360 Video Streaming -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/video.js@7.20.3/dist/video-js.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/video.js@7.20.3/dist/video.min.js"></script>
+    <!-- Pannellum 360 Photo & Video Sphere Viewer -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.css">
     <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pannellum@2.5.6/build/pannellum.video.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #fff; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
@@ -68,7 +73,7 @@
         #modal { display: none; position: fixed; top:0; left:0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; padding: 20px; }
         .modal-body { position: relative; display: flex; justify-content: center; align-items: center; max-width: 90vw; max-height: 65vh; margin-bottom: 15px; }
         #modal-img, #modal-vid, #panorama { max-width: 85vw; max-height: 65vh; border-radius: 6px; }
-        #panorama { width: 800px; height: 500px; display:none; }
+        #panorama { width: 900px; height: 550px; display:none; }
         
         .modal-context-panel { background: rgba(30, 30, 30, 0.95); border: 1px solid #444; border-radius: 8px; padding: 10px 18px; font-size: 13px; color: #eee; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center; max-width: 85vw; }
         .modal-context-item { display: flex; align-items: center; gap: 6px; }
@@ -91,7 +96,7 @@
 
     <!-- Sidebar with Cumulative Filtering Stack -->
     <div class="sidebar">
-        <h2>🖼️ Memories Engine</h2>
+        <h2>🖼 Memories Engine</h2>
 
         <button class="reset-btn" onclick="resetFilters()">🔄 RESET / SHOW ALL</button>
 
@@ -108,12 +113,12 @@
         <div>
             <div class="filter-section-title">Date Range</div>
             <select id="datePresetSelect" onchange="handleDatePresetChange()">
-                <option value="all">🗓️ All Time</option>
-                <option value="this_week">🗓️ This Week</option>
-                <option value="this_month">🗓️ This Month</option>
-                <option value="ytd">🗓️ YTD (Year to Date)</option>
+                <option value="all">🗓 All Time</option>
+                <option value="this_week">🗓 This Week</option>
+                <option value="this_month">🗓 This Month</option>
+                <option value="ytd">🗓 YTD (Year to Date)</option>
                 <option value="1_year">🗓 Past 1 Year</option>
-                <option value="custom">🗓️ Custom Range...</option>
+                <option value="custom">🗓 Custom Range...</option>
             </select>
             <div id="customDateInputs" style="display:none; margin-top:8px; flex-direction:column; gap:6px;">
                 <label style="font-size:11px; color:#aaa;">Start Date
@@ -437,12 +442,15 @@
                     
                     const dateText = item.date ? item.date.split(' ')[0] : '';
                     const cameraText = item.camera && item.camera !== 'Unknown' ? item.camera : '';
+                    const fname = (item.filename || '').toLowerCase();
                     
                     let badgeHtml = '';
-                    if (item.type === 'video') {
+                    if (fname.endsWith('.insp') || item.type === '360_photo') {
+                        badgeHtml = '<span class="badge pano-badge">🌐 360° Photo</span>';
+                    } else if (fname.endsWith('.insv')) {
+                        badgeHtml = '<span class="badge pano-badge">🌐 360° Video</span>';
+                    } else if (item.type === 'video') {
                         badgeHtml = '<span class="badge video-badge">🎥 Video</span>';
-                    } else if (item.type === '360_photo') {
-                        badgeHtml = '<span class="badge pano-badge">🌐 360°</span>';
                     }
 
                     card.innerHTML = `
@@ -640,21 +648,60 @@
             locSpan.onclick = null;
 
             if (panoViewer) {
-                panoViewer.destroy();
+                try {
+                    panoViewer.destroy();
+                } catch (e) {}
                 panoViewer = null;
             }
+            pano.innerHTML = '';
 
-            if (item.type === 'video') {
-                vid.style.display = 'block';
-                vid.src = `/media/${item.id}`;
-                vid.play();
-            } else if (item.type === '360_photo') {
+            const filename = (item.filename || '').toLowerCase();
+            const isInsp = filename.endsWith('.insp');
+            const isInsv = filename.endsWith('.insv');
+            const is360Photo = item.type === '360_photo' || isInsp;
+
+            // Interactive sphere projection for .insv (videos) and .insp / 360 photos
+            if (isInsv) {
+                pano.style.display = 'block';
+
+                // Explicit video element setup for Firefox WebGL video texture streaming
+                pano.innerHTML = `
+                    <video id="pano-video-player" class="video-js vjs-default-skin" controls preload="auto" crossorigin="anonymous" playsinline style="width:100%; height:100%;">
+                        <source src="/media/${item.id}" type="video/mp4">
+                    </video>
+                `;
+
+                // Initialize Pannellum video plugin with Firefox WebGL CORS texture compatibility parameters
+                try {
+                    if (typeof pannellum !== 'undefined' && pannellum.video) {
+                        panoViewer = pannellum.video('pano-video-player', {
+                            type: 'equirectangular',
+                            autoplay: true,
+                            showZoomCtrl: true,
+                            cors: true,
+                            mouseZoom: true,
+                            draggable: true
+                        });
+                    } else if (window.videojs) {
+                        const vPlayer = videojs('pano-video-player');
+                        vPlayer.play();
+                    }
+                } catch (err) {
+                    console.warn("Firefox WebGL 360 Video initialisation error:", err);
+                }
+            } else if (is360Photo) {
                 pano.style.display = 'block';
                 panoViewer = pannellum.viewer('panorama', {
                     "type": "equirectangular",
                     "panorama": `/media/${item.id}`,
-                    "autoLoad": true
+                    "autoLoad": true,
+                    "mouseZoom": true,
+                    "draggable": true
                 });
+            } else if (item.type === 'video') {
+                vid.style.display = 'block';
+                vid.src = `/media/${item.id}`;
+                vid.play();
             } else {
                 img.style.display = 'block';
                 img.src = `/media/${item.id}`;
@@ -701,7 +748,9 @@
             document.getElementById('modal').style.display = 'none';
             document.getElementById('modal-vid').pause();
             if (panoViewer) {
-                panoViewer.destroy();
+                try {
+                    panoViewer.destroy();
+                } catch (e) {}
                 panoViewer = null;
             }
             document.getElementById('panorama').innerHTML = '';
