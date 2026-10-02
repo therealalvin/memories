@@ -3,6 +3,7 @@ import json
 import math
 import sqlite3
 import aiosqlite
+import mimetypes
 import numpy as np
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
@@ -21,6 +22,10 @@ from ml import (
     is_model_loaded,
     get_model_and_processor,
 )
+
+# Register .insv and .insp MIME types for media streaming in browser
+mimetypes.add_type("video/mp4", ".insv")
+mimetypes.add_type("image/jpeg", ".insp")
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="/app/static"), name="static")
@@ -129,8 +134,9 @@ def background_sync(force: bool = False):
         c.execute("PRAGMA busy_timeout=60000;")
         c.execute("PRAGMA synchronous=NORMAL;")
 
-        c.execute("SELECT path, mtime, embedding IS NOT NULL, date_ts IS NOT NULL, lat IS NOT NULL FROM media")
-        existing_records = {row[0]: (float(row[1] or 0.0), bool(row[2]), bool(row[3]), bool(row[4])) for row in c.fetchall()}
+        # Query existing paths, mtimes, embedding presence, and date_ts presence
+        c.execute("SELECT path, mtime, embedding IS NOT NULL, date_ts IS NOT NULL FROM media")
+        existing_records = {row[0]: (float(row[1] or 0.0), bool(row[2]), bool(row[3])) for row in c.fetchall()}
 
         files_to_update = []
         files_needing_embedding = []
@@ -140,10 +146,12 @@ def background_sync(force: bool = False):
             mtime = f["mtime"]
             rec = existing_records.get(path)
 
-            if force or not rec or rec[0] < mtime or not rec[3] or not rec[4]:
+            # Re-extract metadata only if new, forced, modified, or missing date timestamp
+            if force or not rec or (mtime - rec[0] > 0.001) or not rec[2]:
                 files_to_update.append(f)
             
-            if force or not rec or rec[0] < mtime or not rec[1]:
+            # Re-generate embedding only if new, forced, modified, or missing vector
+            if force or not rec or (mtime - rec[0] > 0.001) or not rec[1]:
                 files_needing_embedding.append(f)
 
         total_tasks = len(files_to_update) + len(files_needing_embedding)
@@ -558,5 +566,12 @@ async def serve_media(media_id: int):
                     full_bytes = generate_dynamic_full_image_bytes(path)
                     if full_bytes:
                         return Response(content=full_bytes, media_type="image/jpeg")
+                
+                # Stream .insv as video/mp4 and .insp as image/jpeg so browsers play/view them natively
+                if ext == '.insv':
+                    return FileResponse(path, media_type="video/mp4")
+                if ext == '.insp':
+                    return FileResponse(path, media_type="image/jpeg")
+
                 return FileResponse(path)
             return Response(status_code=404)
