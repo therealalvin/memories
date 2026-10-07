@@ -131,6 +131,14 @@
         </div>
 
         <div>
+            <div class="filter-section-title">Filter by Location Name</div>
+            <div style="display: flex; gap: 6px;">
+                <input type="text" id="locationSearchInput" placeholder="e.g. Seattle, WA or Paris" style="flex-grow: 1; font-size: 13px;" onkeypress="if(event.key === 'Enter') addLocationByNameFilter()">
+                <button onclick="addLocationByNameFilter()" style="padding: 6px 10px; cursor: pointer;">📍 Find</button>
+            </div>
+        </div>
+
+        <div>
             <div class="filter-section-title">Filter by Camera</div>
             <select id="cameraSelect" onchange="addCameraFilter()">
                 <option value="">📷 Select Camera...</option>
@@ -144,6 +152,15 @@
                 <option value="photos">🖼 Photos Only</option>
                 <option value="videos">🎥 Videos Only</option>
             </select>
+        </div>
+
+        <div>
+            <div class="filter-section-title">Result Limit</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 4px;">
+                <span>Display Items:</span>
+                <strong id="limitValueText">100</strong>
+            </div>
+            <input type="range" id="limitSlider" min="100" max="1000" step="50" value="100" style="width: 100%; cursor: pointer; accent-color: #3498db;" oninput="document.getElementById('limitValueText').textContent = this.value" onchange="executeSearch()">
         </div>
 
         <div>
@@ -280,8 +297,8 @@
 
             if (preset === 'this_week') {
                 const d = new Date(now);
-                const day = d.getDay(); // 0 is Sunday
-                const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Start Monday
+                const day = d.getDay();
+                const diff = d.getDate() - day + (day === 0 ? -6 : 1);
                 start = new Date(d.setDate(diff));
                 end = now;
             } else if (preset === 'this_month') {
@@ -349,6 +366,50 @@
             executeSearch();
         }
 
+        async function addLocationByNameFilter() {
+            const input = document.getElementById('locationSearchInput');
+            const query = input.value.trim();
+            if (!query) return;
+
+            try {
+                const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`;
+                const res = await fetch(url, {
+                    headers: { 'User-Agent': 'MemoriesEngineApp/1.0' }
+                });
+                const data = await res.json();
+
+                if (!data || data.length === 0) {
+                    alert(`Could not find coordinates for location: "${query}"`);
+                    return;
+                }
+
+                const place = data[0];
+                const lat = parseFloat(place.lat);
+                const lon = parseFloat(place.lon);
+
+                const nameParts = place.display_name.split(',');
+                const shortLabel = nameParts.length >= 2 
+                    ? `${nameParts[0].trim()}, ${nameParts[2] ? nameParts[2].trim() : nameParts[1].trim()}` 
+                    : place.display_name;
+
+                activeFilters = activeFilters.filter(f => f.type !== 'similar_location');
+
+                activeFilters.push({
+                    id: 'filter_' + Date.now(),
+                    type: 'similar_location',
+                    value: `${lat},${lon}`,
+                    radius_miles: 10.0,
+                    label: `Near: ${shortLabel}`
+                });
+
+                input.value = '';
+                executeSearch();
+            } catch (e) {
+                console.error("Geocoding failed:", e);
+                alert("Failed to lookup location coordinates. Check network connection.");
+            }
+        }
+
         function renderFilterStack() {
             const container = document.getElementById('filterStack');
             container.innerHTML = '';
@@ -413,6 +474,7 @@
 
             const sortBy = document.getElementById('sortBySelect').value;
             const dateRange = getDatePresetRange();
+            const limit = parseInt(document.getElementById('limitSlider').value) || 100;
 
             try {
                 const res = await fetch('/api/search', {
@@ -422,7 +484,8 @@
                         filters: activeFilters, 
                         sort_by: sortBy,
                         start_date: dateRange.start_date,
-                        end_date: dateRange.end_date
+                        end_date: dateRange.end_date,
+                        limit: limit
                     })
                 });
 
@@ -447,9 +510,7 @@
                     let badgeHtml = '';
                     if (fname.endsWith('.insp') || item.type === '360_photo') {
                         badgeHtml = '<span class="badge pano-badge">🌐 360° Photo</span>';
-                    } else if (fname.endsWith('.insv')) {
-                        badgeHtml = '<span class="badge pano-badge">🌐 360° Video</span>';
-                    } else if (item.type === 'video') {
+                    } else if (fname.endsWith('.insv') || item.type === 'video') {
                         badgeHtml = '<span class="badge video-badge">🎥 Video</span>';
                     }
 
@@ -514,7 +575,6 @@
             const item = currentMediaList[currentIndex];
             closeModal();
 
-            // Replace any existing similar picture filter
             activeFilters = activeFilters.filter(f => f.type !== 'similar');
 
             activeFilters.push({
@@ -536,7 +596,6 @@
 
             const dateLabel = item.date ? item.date.split(' ')[0] : `Photo #${item.id}`;
 
-            // Replace any existing similar date filter
             activeFilters = activeFilters.filter(f => f.type !== 'similar_date');
 
             activeFilters.push({
@@ -566,7 +625,6 @@
 
             const locLabel = `${details.lat.toFixed(3)}°, ${details.lon.toFixed(3)}°`;
 
-            // Replace any existing similar location filter
             activeFilters = activeFilters.filter(f => f.type !== 'similar_location');
 
             activeFilters.push({
@@ -609,6 +667,7 @@
         function resetFilters() {
             activeFilters = [];
             document.getElementById('searchInput').value = '';
+            document.getElementById('locationSearchInput').value = '';
             document.getElementById('mediaTypeSelect').value = 'all';
             document.getElementById('cameraSelect').value = '';
             document.getElementById('sortBySelect').value = 'date_desc';
@@ -616,6 +675,8 @@
             document.getElementById('customDateInputs').style.display = 'none';
             document.getElementById('startDateInput').value = '';
             document.getElementById('endDateInput').value = '';
+            document.getElementById('limitSlider').value = 100;
+            document.getElementById('limitValueText').textContent = '100';
             executeSearch();
         }
 
@@ -660,36 +721,7 @@
             const isInsv = filename.endsWith('.insv');
             const is360Photo = item.type === '360_photo' || isInsp;
 
-            // Interactive sphere projection for .insv (videos) and .insp / 360 photos
-            if (isInsv) {
-                pano.style.display = 'block';
-
-                // Explicit video element setup for Firefox WebGL video texture streaming
-                pano.innerHTML = `
-                    <video id="pano-video-player" class="video-js vjs-default-skin" controls preload="auto" crossorigin="anonymous" playsinline style="width:100%; height:100%;">
-                        <source src="/media/${item.id}" type="video/mp4">
-                    </video>
-                `;
-
-                // Initialize Pannellum video plugin with Firefox WebGL CORS texture compatibility parameters
-                try {
-                    if (typeof pannellum !== 'undefined' && pannellum.video) {
-                        panoViewer = pannellum.video('pano-video-player', {
-                            type: 'equirectangular',
-                            autoplay: true,
-                            showZoomCtrl: true,
-                            cors: true,
-                            mouseZoom: true,
-                            draggable: true
-                        });
-                    } else if (window.videojs) {
-                        const vPlayer = videojs('pano-video-player');
-                        vPlayer.play();
-                    }
-                } catch (err) {
-                    console.warn("Firefox WebGL 360 Video initialisation error:", err);
-                }
-            } else if (is360Photo) {
+            if (is360Photo) {
                 pano.style.display = 'block';
                 panoViewer = pannellum.viewer('panorama', {
                     "type": "equirectangular",
@@ -698,7 +730,7 @@
                     "mouseZoom": true,
                     "draggable": true
                 });
-            } else if (item.type === 'video') {
+            } else if (item.type === 'video' || isInsv) {
                 vid.style.display = 'block';
                 vid.src = `/media/${item.id}`;
                 vid.play();
