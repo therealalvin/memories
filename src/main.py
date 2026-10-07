@@ -94,6 +94,7 @@ class QueryRequest(BaseModel):
     sort_by: str = "date_desc"
     start_date: Optional[str] = None
     end_date: Optional[str] = None
+    limit: int = 100
 
 
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -146,11 +147,9 @@ def background_sync(force: bool = False):
             mtime = f["mtime"]
             rec = existing_records.get(path)
 
-            # Re-extract metadata only if new, forced, modified, or missing date timestamp
             if force or not rec or (mtime - rec[0] > 0.001) or not rec[2]:
                 files_to_update.append(f)
             
-            # Re-generate embedding only if new, forced, modified, or missing vector
             if force or not rec or (mtime - rec[0] > 0.001) or not rec[1]:
                 files_needing_embedding.append(f)
 
@@ -170,7 +169,7 @@ def background_sync(force: bool = False):
 
         completed_work = 0
 
-        # Step A: Metadata and GPS extraction (Batches of 500)
+        # Step A: Metadata and GPS extraction
         if files_to_update:
             sync_status["phase"] = "metadata"
             meta_chunk_size = 500
@@ -212,7 +211,7 @@ def background_sync(force: bool = False):
                 sync_status["current"] = completed_work
                 sync_status["percent"] = max(5, int((completed_work / total_tasks) * 100))
 
-        # Step B: GPU CLIP embedding extraction (Chunks of 32)
+        # Step B: GPU CLIP embedding extraction
         if files_needing_embedding:
             if not is_model_loaded():
                 sync_status["phase"] = "embeddings"
@@ -403,19 +402,23 @@ async def search_cumulative(req: QueryRequest):
             where_clauses.append("date_ts >= ? AND date_ts <= ?")
             params.extend([min_bound, max_bound])
 
-        # 4. Location Radius (Bounding box optimization)
+        # 4. Location Radius (Bounding box optimization: supports ID lookup or "lat,lon" strings)
         location_filters = []
         for f in req.filters:
             if f.type == "similar_location":
                 try:
-                    target_id = int(f.value)
-                    async with db.execute("SELECT lat, lon FROM media WHERE id = ?", (target_id,)) as cursor:
-                        t_row = await cursor.fetchone()
-                    if t_row and t_row[0] is not None and t_row[1] is not None:
-                        t_lat, t_lon = float(t_row[0]), float(t_row[1])
-                        location_filters.append((t_lat, t_lon, float(f.radius_miles)))
-                except Exception:
-                    pass
+                    if "," in str(f.value):
+                        lat_str, lon_str = str(f.value).split(",")
+                        location_filters.append((float(lat_str), float(lon_str), float(f.radius_miles)))
+                    else:
+                        target_id = int(f.value)
+                        async with db.execute("SELECT lat, lon FROM media WHERE id = ?", (target_id,)) as cursor:
+                            t_row = await cursor.fetchone()
+                        if t_row and t_row[0] is not None and t_row[1] is not None:
+                            t_lat, t_lon = float(t_row[0]), float(t_row[1])
+                            location_filters.append((t_lat, t_lon, float(f.radius_miles)))
+                except Exception as e:
+                    print(f"Error parsing location filter: {e}")
 
         if location_filters:
             where_clauses.append("lat IS NOT NULL AND lon IS NOT NULL")
@@ -546,7 +549,7 @@ async def search_cumulative(req: QueryRequest):
         candidates.sort(key=lambda x: x["date_ts"], reverse=True)
 
     output = []
-    for item in candidates[:250]:
+    for item in candidates[:req.limit]:
         item.pop("embedding", None)
         output.append(item)
 
